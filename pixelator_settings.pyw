@@ -27,7 +27,7 @@ PID_FILE = os.path.join(HERE, "running.pid")
 STATUS_FILE = os.path.join(HERE, "status.json")
 LOG_FILE = os.path.join(HERE, "pixelator.log")
 ICON_FILE = os.path.join(HERE, "pixelator.ico")
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 APP_NAME = "ScreenPixelator " + APP_VERSION
 GITHUB_REPO = "screenpixelator/ScreenPixelator"     # where new versions are published
 CONTACT = "screenpixelator@proton.me"
@@ -88,11 +88,26 @@ COVER_LABELS = {
     "also_clothed": "...also when covered by clothing",
     "cover_male_genitals": "Men's genitals", "cover_buttocks": "Buttocks",
 }
+def _preset(cover, women="show", men="show", darkness=0, parts=80, people=65, margin=20, hold=0.8,
+            block=15):
+    """cover: breasts, women's genitals, also clothed, men's genitals, buttocks,
+    whole women, whole men, unclear people (1/0)."""
+    d = {k: bool(v) for k, v in zip(COVER_KEYS, cover)}
+    d.update(faces_women=women, faces_men=men, darkness=darkness, catch_parts=parts,
+             catch_people=people, zone_size=margin, hold=hold,
+             block_size=block)
+    return d
+
+
 PRESETS = {
-    "Hide women (faces visible)": (1, 1, 1, 0, 0, 1, 0, 1),
-    "Hide men": (0, 0, 0, 1, 0, 0, 1, 0),
-    "Hide everyone": (1, 1, 1, 1, 1, 1, 1, 1),
-    "Hide nudity only": (1, 1, 0, 1, 1, 0, 0, 0),
+    "Hide nudity only": _preset((1, 1, 0, 1, 1, 0, 0, 0)),
+    "Women covered, men visible": _preset((1, 1, 1, 0, 1, 1, 0, 1), parts=75, people=60),
+    "Men covered, women visible": _preset((0, 0, 0, 1, 1, 0, 1, 0), parts=75, people=60),
+    "Everyone covered": _preset((1, 1, 1, 1, 1, 1, 1, 1), parts=75, people=60),
+    "Women fully covered (eyes only)": _preset((1, 1, 1, 0, 1, 1, 0, 1), women="eyes", darkness=85,
+                                               parts=85, people=75, margin=10, hold=1.2,
+                                               block=6),
+    "Anonymous (eyes hidden)": _preset((0, 0, 0, 0, 0, 0, 0, 0), women="noeyes", men="noeyes"),
 }
 DEFAULT_PROGRAMS = (
     # browsers
@@ -114,9 +129,9 @@ FACE_CHOICES = (("show", "Show"), ("hide", "Hide"), ("eyes", "Show only the eyes
 
 # key, label, from, to, default, unit, hint
 STRENGTH = [
-    ("catch_parts", "Catch more nudity", 0, 100, 90, "", "higher = finds more, also more mistakes"),
-    ("catch_people", "Catch more people", 0, 100, 70, "", "for covering whole bodies"),
-    ("zone_size", "Margin around body parts", 0, 200, 90, "%", "how far the mosaic reaches past a part"),
+    ("catch_parts", "Catch more nudity", 0, 100, 80, "", "higher = finds more, also more mistakes"),
+    ("catch_people", "Catch more people", 0, 100, 65, "", "for covering whole bodies"),
+    ("zone_size", "Margin around body parts", 0, 200, 20, "%", "breasts, buttocks (genitals at least 50%)"),
     ("body_margin", "Margin around bodies", 0, 6, 1, " blocks", "extra blocks around a body outline"),
     ("hold", "Stay covered after losing it", 0.2, 5.0, 0.8, " s", "longer = fewer flashes, slower to clear"),
     ("male_opening", "Opening around men's genitals", 0, 150, 30, "%", "bigger = more of him visible"),
@@ -124,15 +139,14 @@ STRENGTH = [
     ("lean_male", "When unsure: lean to 'man'", 0, 100, 60, "", "higher = men are uncovered sooner"),
 ]
 LOOK = [
-    ("block_size", "Block size", 6, 48, 18, " px", ""),
+    ("block_size", "Block size", 6, 48, 15, " px", ""),
     ("darkness", "Block colour", 0, 100, 0, "%", ""),
 ]
-DEFAULTS = {"cover_breasts": True, "cover_female_genitals": True, "also_clothed": True,
-            "cover_male_genitals": False, "cover_buttocks": False, "cover_women": True,
-            "cover_men": False, "cover_unclear": True, "faces_women": "show", "faces_men": "show", "run_at_startup": False, "cpu_level": "auto",
+DEFAULTS = {"faces_women": "show", "faces_men": "show", "run_at_startup": False, "cpu_level": "auto",
             "check_updates": True,
             "start_hidden": False, "only_in_programs": True, "programs": list(DEFAULT_PROGRAMS)}
 DEFAULTS.update({k: d for k, _, _, _, d, _, _ in STRENGTH + LOOK})
+DEFAULTS.update(PRESETS["Hide nudity only"])      # new installs start with this choice
 
 
 # --- Files and processes ---
@@ -378,6 +392,10 @@ class App:
     def __init__(self, root: tk.Tk, s: dict) -> None:
         self.root, self.s = root, s
         self.new_password = None          # (salt, hash), "" to remove, None = unchanged
+        self.busy = None                  # text while starting/stopping in the background
+        self.busy_result = None
+        self.apply_later = False          # a quick choice made while busy
+        self.last_seen, self.changed_at = None, 0.0   # for applying changes by themselves
         self.scale = root.winfo_fpixels("1i") / 96
         self.history = deque([(0.0, 0)] * 120, maxlen=120)
         self.pulse = 0.0
@@ -416,7 +434,7 @@ class App:
         # 1. What to cover + faces
         cv = cards[0]
         ttk.Label(cv, text="What to cover", style="Head.TLabel").grid(row=0, column=0, sticky="w")
-        self.preset = ttk.Combobox(cv, state="readonly", width=26, values=list(PRESETS))
+        self.preset = ttk.Combobox(cv, state="readonly", width=30, values=list(PRESETS))
         self.preset.grid(row=1, column=0, sticky="w", pady=(6, 8))
         self.preset.bind("<<ComboboxSelected>>", self.use_preset)
         self.v = {k: tk.BooleanVar(value=bool(s[k])) for k in COVER_KEYS}
@@ -543,9 +561,8 @@ class App:
         self.unsaved = ttk.Label(ft, text="", style="Unsaved.TLabel")
         self.unsaved.grid(row=2, column=5, sticky="e", padx=10)
         ttk.Button(ft, text="Uninstall...", command=self.uninstall).grid(row=2, column=6, padx=3)
-        ttk.Button(ft, text="Save and apply", style="Accent.TButton", command=self.apply).grid(
-            row=2, column=7, padx=3)
-        ttk.Button(ft, text="Close", command=self.close).grid(row=2, column=8, padx=(3, 6))
+        ttk.Button(ft, text="Close", style="Accent.TButton", command=self.close).grid(
+            row=2, column=8, padx=(3, 6))
 
         self.show_password_state()
         self.custom()
@@ -577,7 +594,7 @@ class App:
             if key == "darkness":
                 self.warn.config(text="Warning: very dark blocks hide everything underneath them. If "
                                       "something is detected by mistake, buttons or text there can't "
-                                      "be seen." if v >= 75 else "")
+                                      "be seen." if v >= 80 else "")
 
         def show(_=None):   # dragging: snap to whole steps
             v = var.get()
@@ -624,6 +641,19 @@ class App:
 
     def tick(self) -> None:
         self.running = running_pid() is not None
+        if self.busy:          # start/stop still working in the background
+            self.root.after(300, self.tick)
+            return
+        if self.apply_later:              # the last quick choice still has to be applied
+            self.apply_later = False
+            self.apply()
+            self.root.after(300, self.tick)
+            return
+        if self.busy_result is not None:
+            self.root.config(cursor="")
+            if self.busy_result is False:
+                messagebox.showerror(APP_NAME, "Could not stop the pixelator.")
+            self.busy_result = None
         self.status.config(text="Running" if self.running else "Not running",
                            foreground=GREEN if self.running else RED)
         self.hotkey.config(text=("CTRL + ALT + Q is off while a password is set" if self.s.get("password_hash")
@@ -650,7 +680,16 @@ class App:
                               else "Waiting for the first numbers...")
             self.history.append((0.0, 0))
         self.draw_graph()
-        self.unsaved.config(text="● Unsaved changes" if self.collect() != self.s else "")
+        # Changes take effect by themselves, 2 seconds after the last one
+        now = self.collect()
+        if now == self.s:
+            self.unsaved.config(text="")
+        elif now != self.last_seen:
+            self.last_seen, self.changed_at = now, time.monotonic()
+            self.unsaved.config(text="● Applying your changes...")
+        elif time.monotonic() - self.changed_at >= 2:
+            self.apply()
+        self.custom()
         self.root.after(1000, self.tick)
 
     def draw_graph(self) -> None:
@@ -671,13 +710,30 @@ class App:
 
     # -- helpers
     def use_preset(self, _=None) -> None:
-        for k, on in zip(COVER_KEYS, PRESETS[self.preset.get()]):
-            self.v[k].set(bool(on))
+        """A quick choice takes effect at once (no Save needed); own changes
+        made afterwards take effect 2 seconds after the last change."""
+        p = PRESETS.get(self.preset.get())
+        if not p:
+            return
+        for k, v in p.items():
+            if k in self.v:
+                self.v[k].set(v)
+            elif k in self.faces:
+                self.faces[k].set(dict(FACE_CHOICES)[v])
+            elif k in self.num:
+                self.num[k][0].set(v)
+        if self.busy:              # still restarting for the previous choice
+            self.apply_later = True
+        else:
+            self.apply()
 
     def custom(self) -> None:
-        now = tuple(int(self.v[k].get()) for k in COVER_KEYS)
-        name = next((n for n, p in PRESETS.items() if p == now), "")
-        self.preset.set(name or "(your own choice)")
+        """Shows which quick choice the current settings match, if any."""
+        now = self.collect()
+        name = next((n for n, p in PRESETS.items()
+                     if all(now.get(k) == v for k, v in p.items())), "")
+        if self.preset.get() != (name or "(your own choice)"):
+            self.preset.set(name or "(your own choice)")
 
     def reset_strength(self) -> None:
         for key, _, _, _, default, _, _ in STRENGTH:
@@ -757,7 +813,7 @@ class App:
         return next((v for v, t in FACE_CHOICES if t == text), "show")
 
     def reset_look(self) -> None:
-        self.num["block_size"][0].set(18)
+        self.num["block_size"][0].set(DEFAULTS["block_size"])
         self.num["darkness"][0].set(0)
 
     def donate(self) -> None:
@@ -809,16 +865,30 @@ class App:
         self.pw_text.config(text=t)
 
     # -- actions
+    def in_background(self, work, busy_text: str) -> None:
+        """Runs start/stop work outside the window, so the window never hangs
+        (stopping can take a few seconds, longer when Windows is slow)."""
+        import threading
+        if self.busy:
+            return
+        self.busy = busy_text
+        self.root.config(cursor="watch")
+        self.status.config(text=busy_text, foreground=AMBER)
+
+        def run():
+            try:
+                self.busy_result = work()
+            except Exception:
+                self.busy_result = False
+            self.busy = None      # tick() notices this and tidies up
+
+        threading.Thread(target=run, daemon=False).start()   # finishes even when the window closes
+
     def start(self) -> None:
-        start_pixelator()
+        self.in_background(lambda: start_pixelator() or True, "Starting...")
 
     def stop(self) -> None:
-        self.root.config(cursor="watch")
-        self.root.update()
-        ok = stop_pixelator()
-        self.root.config(cursor="")
-        if not ok:
-            messagebox.showerror(APP_NAME, "Could not stop the pixelator.")
+        self.in_background(stop_pixelator, "Stopping...")
 
     def set_password(self) -> None:
         a = simpledialog.askstring("Password", "New password:", show="*", parent=self.root)
@@ -868,18 +938,23 @@ class App:
             return
         self.s, self.new_password = s, None
         self.show_password_state()
-        self.root.config(cursor="watch")
-        self.root.update()
-        set_startup(s["run_at_startup"])
-        stop_pixelator()            # it reads the settings when it starts
-        start_pixelator()
         self.history.extend([(0.0, 0)] * 3)
-        self.root.config(cursor="")
+
+        def restart():
+            set_startup(s["run_at_startup"])
+            ok = stop_pixelator()      # it reads the settings when it starts
+            start_pixelator()
+            return ok
+
+        if self.busy:          # a restart is running: restart once more when it is done
+            self.apply_later = True
+            return
+        self.in_background(restart, "Restarting...")
 
     def close(self) -> None:
-        if self.collect() != self.s and not messagebox.askyesno(
-                APP_NAME, "Close without saving your changes?"):
-            return
+        if self.collect() != self.s:   # a change still waiting: apply it before closing
+            self.busy = None
+            self.apply()
         self.root.destroy()
 
     def uninstall(self) -> None:
@@ -887,7 +962,6 @@ class App:
                                    "(Python and its packages stay installed.)"):
             return
         remove_program()
-        messagebox.showinfo("Uninstall", APP_NAME + " has been removed.")
         self.root.destroy()
 
 
@@ -913,7 +987,7 @@ def already_open() -> bool:
         u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         u.SetForegroundWindow.argtypes = [wintypes.HWND]
         u.IsIconic.argtypes = [wintypes.HWND]
-        hwnd = u.FindWindowW(None, APP_NAME)
+        hwnd = u.FindWindowW("TkTopLevel", APP_NAME)   # the settings window itself
         if hwnd:
             if u.IsIconic(hwnd):
                 u.ShowWindow(hwnd, 9)        # SW_RESTORE
@@ -924,16 +998,45 @@ def already_open() -> bool:
 
 
 def ask_password(root: tk.Tk, s: dict) -> bool:
+    """Asks the password in the window itself. True when right (or none set)."""
     if not s.get("password_hash"):
         return True
-    for _ in range(3):
-        pw = simpledialog.askstring(APP_NAME, "Password:", show="*", parent=root)
-        if pw is None:
-            return False
-        if secrets.compare_digest(hash_password(pw, s.get("password_salt", "")), s["password_hash"]):
-            return True
-        messagebox.showerror(APP_NAME, "Wrong password.")
-    return False
+    root.title(APP_NAME)
+    frame = ttk.Frame(root, style="Bg.TFrame", padding=30)
+    frame.grid()
+    ttk.Label(frame, text=APP_NAME, style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(frame, text="Password:", style="Bg.TLabel").grid(row=1, column=0, sticky="w", pady=(16, 0))
+    entry = ttk.Entry(frame, show="*", width=28)
+    entry.grid(row=1, column=1, sticky="w", pady=(16, 0), padx=(8, 0))
+    note = ttk.Label(frame, text="", style="Unsaved.TLabel")
+    note.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    result = tk.StringVar(value="")
+    tries = [0]
+
+    def check(_=None):
+        if secrets.compare_digest(hash_password(entry.get(), s.get("password_salt", "")), s["password_hash"]):
+            result.set("ok")
+            return
+        tries[0] += 1
+        entry.delete(0, "end")
+        if tries[0] >= 3:
+            result.set("no")
+        else:
+            note.config(text="Wrong password.")
+
+    buttons = ttk.Frame(frame, style="Bg.TFrame")
+    buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+    ttk.Button(buttons, text="OK", style="Accent.TButton", command=check).grid(row=0, column=0, padx=4)
+    ttk.Button(buttons, text="Cancel", command=lambda: result.set("no")).grid(row=0, column=1)
+    entry.bind("<Return>", check)
+    root.protocol("WM_DELETE_WINDOW", lambda: result.set("no"))
+    root.deiconify()
+    root.lift()
+    root.focus_force()
+    entry.focus_set()
+    root.wait_variable(result)
+    frame.destroy()
+    return result.get() == "ok"
 
 
 def main() -> None:
@@ -956,20 +1059,39 @@ def main() -> None:
     if "--uninstall" in sys.argv:
         if messagebox.askyesno("Uninstall", "Remove " + APP_NAME + " from this computer?\n"
                                "(Python and its packages stay installed.)"):
-            remove_program()
-            messagebox.showinfo("Uninstall", APP_NAME + " has been removed.")
+            remove_program()     # no "removed" message: it would keep the app listed until OK
         root.destroy()
         return
     s = load()
+    setup_style(root)
     if not ask_password(root, s):
         root.destroy()
         return
-    setup_style(root)
+    root.withdraw()
     app = App(root, s)
     root.protocol("WM_DELETE_WINDOW", app.close)
     root.deiconify()
     root.mainloop()
 
 
+def log_errors() -> None:
+    """Without a console window, errors go to settings.log next to the program."""
+    import traceback
+
+    def write(*info):
+        try:
+            with open(os.path.join(HERE, "settings.log"), "a", encoding="utf-8") as f:
+                f.write(time.strftime("[%Y-%m-%d %H:%M:%S] ") + "".join(traceback.format_exception(*info)))
+        except Exception:
+            pass
+
+    sys.excepthook = write
+    tk.Tk.report_callback_exception = lambda self, *info: write(*info)
+
+
 if __name__ == "__main__":
-    main()
+    log_errors()
+    try:
+        main()
+    except Exception:
+        sys.excepthook(*sys.exc_info())

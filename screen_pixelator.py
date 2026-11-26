@@ -48,10 +48,12 @@ MONITOR_INDEX = 1
 CONFIDENCE_THRESHOLD = 0.1
 
 # Mosaic block size in pixels (bigger = coarser blocks)
-PIXEL_BLOCK_SIZE = 18
+PIXEL_BLOCK_SIZE = 15
 
 # Enlarge each detected body-part zone by this fraction on every side
-BOX_PADDING = 0.90
+BOX_PADDING = 0.20
+# Genitals (and anus) get at least this much: small, and they must not slip out
+GENITAL_MIN_PADDING = 0.50
 
 # Body-part labels to pixelate (NudeNet labels)
 TARGET_CLASSES = {
@@ -152,9 +154,10 @@ STOP_FILE = os.path.join(HERE, "stop.request")     # the settings program asks t
 STATUS_FILE = os.path.join(HERE, "status.json")    # live numbers for the settings program
 PID_FILE = os.path.join(HERE, "running.pid")
 LOG_FILE = os.path.join(HERE, "pixelator.log")
+CHECK_FILE = os.path.join(HERE, "capture_check.json")   # result of the one-time overlay check
 SETTINGS_APP = os.path.join(HERE, "pixelator_settings.pyw")
 ICON_FILE = os.path.join(HERE, "pixelator.ico")
-APP_NAME = "ScreenPixelator 1.0"
+APP_NAME = "ScreenPixelator 1.1"
 
 
 def apply_settings() -> None:
@@ -168,6 +171,8 @@ def apply_settings() -> None:
     try:
         with open(SETTINGS_FILE, encoding="utf-8") as f:
             s = json.load(f)
+    except FileNotFoundError:
+        s = {}           # no settings yet: the defaults below (hide nudity only)
     except Exception:
         return
     PIXEL_BLOCK_SIZE = max(6, min(60, int(s.get("block_size", PIXEL_BLOCK_SIZE))))
@@ -178,9 +183,9 @@ def apply_settings() -> None:
             return default
     DARKNESS = num("darkness", 100 if s.get("style") == "black" else 0, 0, 100) / 100
     # Sliders of the settings program ("catch more" 0-100, sizes in %)
-    CONFIDENCE_THRESHOLD = 0.55 - 0.005 * num("catch_parts", 90, 0, 100)
-    PERSON_THRESHOLD = 0.70 - 0.005 * num("catch_people", 70, 0, 100)
-    BOX_PADDING = num("zone_size", 90, 0, 200) / 100
+    CONFIDENCE_THRESHOLD = 0.55 - 0.005 * num("catch_parts", 80, 0, 100)
+    PERSON_THRESHOLD = 0.70 - 0.005 * num("catch_people", 65, 0, 100)
+    BOX_PADDING = num("zone_size", 20, 0, 200) / 100
     BODY_GROW_BLOCKS = int(round(num("body_margin", 1, 0, 6)))
     HOLD_SECONDS = num("hold", 0.8, 0.2, 5.0)
     BODY_HOLD_SECONDS = HOLD_SECONDS + 0.7
@@ -188,24 +193,24 @@ def apply_settings() -> None:
     MALE_OPENING_GROW = num("male_opening", 30, 0, 150) / 100
     FACE_OPENING_GROW = num("face_opening", 15, 0, 100) / 100
     LEAN_TO_MALE = num("lean_male", 60, 0, 100) / 100
-    clothed = bool(s.get("also_clothed", True))
+    clothed = bool(s.get("also_clothed", False))
     parts = set()
     if s.get("cover_breasts", True):
         parts |= {"FEMALE_BREAST_EXPOSED"} | ({"FEMALE_BREAST_COVERED"} if clothed else set())
     if s.get("cover_female_genitals", True):
         parts |= {"FEMALE_GENITALIA_EXPOSED"} | ({"FEMALE_GENITALIA_COVERED"} if clothed else set())
-    if s.get("cover_male_genitals", False):
+    if s.get("cover_male_genitals", True):
         parts.add("MALE_GENITALIA_EXPOSED")
-    if s.get("cover_buttocks", False):
+    if s.get("cover_buttocks", True):
         parts |= {"BUTTOCKS_EXPOSED", "ANUS_EXPOSED"}
     old = {"hide_women": "hide", "women_eyes": "eyes"}.get(s.get("faces"), "show")   # older settings
     FACE_WOMEN = s.get("faces_women", old)
     FACE_MEN = s.get("faces_men", "show")
     TARGET_CLASSES = parts
-    COVER_FEMALE_BODIES = bool(s.get("cover_women", True))
+    COVER_FEMALE_BODIES = bool(s.get("cover_women", False))
     COVER_MALE_BODIES = bool(s.get("cover_men", False))
-    COVER_UNKNOWN_PEOPLE = bool(s.get("cover_unclear", True)) and (COVER_FEMALE_BODIES or COVER_MALE_BODIES)
-    SHOW_MALE_GENITALIA = not (s.get("cover_male_genitals", False) or COVER_MALE_BODIES)
+    COVER_UNKNOWN_PEOPLE = bool(s.get("cover_unclear", False)) and (COVER_FEMALE_BODIES or COVER_MALE_BODIES)
+    SHOW_MALE_GENITALIA = not (s.get("cover_male_genitals", True) or COVER_MALE_BODIES)
     EXIT_HOTKEY = not s.get("password_hash")
     TRAY_ICON = not s.get("start_hidden", False)
     level = s.get("cpu_level", "auto")
@@ -637,13 +642,13 @@ class Person:
     def __init__(self, box, score, mask, mbox, k) -> None:
         self.box = box        # (x, y, w, h) in image pixels
         self.score = score
-        self.mask = mask      # bool array, outline inside mbox (mask pixels)
+        self.mask = mask      # float 0..1 (chance), outline inside mbox (mask pixels)
         self.mbox = mbox      # (x1, y1, x2, y2) in mask pixels
         self.k = k            # image pixels -> mask pixels
 
     def contains(self, x: float, y: float) -> bool:
         qx, qy = int(x * self.k) - self.mbox[0], int(y * self.k) - self.mbox[1]
-        return 0 <= qy < self.mask.shape[0] and 0 <= qx < self.mask.shape[1] and bool(self.mask[qy, qx])
+        return 0 <= qy < self.mask.shape[0] and 0 <= qx < self.mask.shape[1] and self.mask[qy, qx] > 0.5
 
     def mask_for(self, zone: Box) -> np.ndarray:
         """Outline cut out for `zone` (x1, y1, x2, y2 in image pixels), float 0/1."""
@@ -688,7 +693,10 @@ class PersonFinder:
                 continue
             coef = rows[keep[i], 84:116]
             logits = coef @ protos[:, my1:my2, mx1:mx2].reshape(32, -1)
-            mask = (logits > 0).reshape(my2 - my1, mx2 - mx1)       # sigmoid > 0.5
+            # Kept as a chance (0..1), not yes/no: a smooth outline when it is
+            # enlarged to small blocks
+            mask = (1.0 / (1.0 + np.exp(-np.clip(logits, -30, 30)))).astype(np.float32)
+            mask = mask.reshape(my2 - my1, mx2 - mx1)
             box = (x * fx, y * fy, bw_ * fx, bh_ * fy)
             people.append(Person(box, float(score[keep[i]]), mask, (mx1, my1, mx2, my2), k_model / fx))
         return people
@@ -825,15 +833,46 @@ def build_zones(targets, signs, people: list[Person], ox: int, oy: int,
 
         targets = [t for t in targets if keep(*t)]
 
+    # Men covered but women not: buttocks found on a recognised woman stay
+    # visible (the detector itself does not know whose buttocks they are)
+    if COVER_MALE_BODIES and not COVER_FEMALE_BODIES:
+        women = [p for p, g in genders if g == "woman"]
+        men_ = [p for p, g in genders if g == "man"]
+        rear = [(x, y, x + w, y + h) for n, s, x, y, w, h in signs if n in ("BUTTOCKS_EXPOSED", "ANUS_EXPOSED")]
+
+        def hers(x, y, w, h) -> bool:
+            cx, cy = x + w / 2, y + h / 2
+            return (any(r[0] <= cx <= r[2] and r[1] <= cy <= r[3] for r in rear)
+                    and any(p.contains(cx, cy) for p in women) and not any(m.contains(cx, cy) for m in men_))
+
+        targets = [t for t in targets if not hers(*t)]
+
     def edges_of(x, y, w, h) -> str:  # in screen pixels
         return "".join(e for e, hit in (("l", x <= 2), ("t", y <= 2), ("r", x + w >= img_w - 2),
                                         ("b", y + h >= img_h - 2)) if hit)
 
     zones = []
-    parts = [pad_box((x + ox, y + oy, w, h), BOX_PADDING, img_w, img_h) for x, y, w, h in targets]
-    for b in merge_boxes([b for b in parts if b]):
-        zones.append(ZoneSpec(b, "part", pad=BOX_PADDING,
-                              edges=edges_of(*inner_xywh(b, BOX_PADDING))))
+    # Breasts and buttocks get the margin of the slider; genitals at least
+    # GENITAL_MIN_PADDING
+    small = [(x, y, w, h) for n, s_, x, y, w, h in signs if "GENITALIA" in n or "ANUS" in n]
+
+    def pad_for(x, y, w, h) -> float:
+        cx, cy = x + w / 2, y + h / 2
+        if any(sx <= cx <= sx + sw and sy <= cy <= sy + sh for sx, sy, sw, sh in small):
+            return max(BOX_PADDING, GENITAL_MIN_PADDING)
+        return BOX_PADDING
+
+    padded = []
+    for x, y, w, h in targets:
+        pad = pad_for(x, y, w, h)
+        b = pad_box((x + ox, y + oy, w, h), pad, img_w, img_h)
+        if b:
+            padded.append((b, pad))
+    for b in merge_boxes([b for b, _ in padded]):
+        # The smallest margin of what was joined: the oval stays big enough
+        pad = min((p_ for pb, p_ in padded if pb[0] >= b[0] and pb[1] >= b[1]
+                   and pb[2] <= b[2] and pb[3] <= b[3]), default=BOX_PADDING)
+        zones.append(ZoneSpec(b, "part", pad=pad, edges=edges_of(*inner_xywh(b, pad))))
 
     cover = {"woman": COVER_FEMALE_BODIES, "man": COVER_MALE_BODIES, "unknown": COVER_UNKNOWN_PEOPLE}
     for p, gender in genders:
@@ -860,9 +899,10 @@ def build_zones(targets, signs, people: list[Person], ox: int, oy: int,
             owner = face_owner(sign, signs, men, women)
             mode = FACE_WOMEN if owner == "woman" else FACE_MEN if owner == "man" else "show"
         if mode == "noeyes":
-            # A mosaic band over the eyes; the rest of the face stays visible
-            band = (round(x + ox - 0.05 * w), round(y + oy + 0.2 * h),
-                    round(x + ox + 1.05 * w), round(y + oy + 0.55 * h))
+            # A wide mosaic band over the eyes, like an anonymous photo; the rest
+            # of the face stays visible
+            band = (round(x + ox - 0.15 * w), round(y + oy + 0.12 * h),
+                    round(x + ox + 1.15 * w), round(y + oy + 0.6 * h))
             band = (max(0, band[0]), max(0, band[1]), min(img_w, band[2]), min(img_h, band[3]))
             if band[2] > band[0] and band[3] > band[1]:
                 zones.append(ZoneSpec(band, "bar", pad=0.0))
@@ -1619,13 +1659,28 @@ class MosaicGrid:
         return (max(0, box[0] // b), max(0, box[1] // b),
                 min(self.gw, -(-box[2] // b)), min(self.gh, -(-box[3] // b)))
 
+    def rounded(self, box: Box, gw_: int, gh_: int, zx1: int, zy1: int, pad: float) -> np.ndarray:
+        """A zone as an oval instead of a rectangle (no square corners sticking
+        out), but always big enough to cover the detected thing itself."""
+        if gw_ < 4 or gh_ < 4:
+            return np.ones((gh_, gw_), bool)
+        b = self.b
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        core = 1 / (1 + 2 * max(0.0, pad))         # the thing itself, as part of the zone
+        grow = max(1.0, core * math.sqrt(2) * 1.05)
+        ax = max(1.0, (box[2] - box[0]) / 2 * grow + b / 2)
+        ay = max(1.0, (box[3] - box[1]) / 2 * grow + b / 2)
+        xs = ((np.arange(gw_) + zx1 + 0.5) * b - cx) / ax
+        ys = ((np.arange(gh_) + zy1 + 0.5) * b - cy) / ay
+        return xs[None, :] ** 2 + ys[:, None] ** 2 <= 1.0
+
     def coverage(self, items) -> np.ndarray:
-        """items: (box, outline or None, kind, screen edges it was cut off by).
+        """items: (box, outline or None, kind, screen edges it was cut off by, padding).
         Openings ("show") keep the mosaic away."""
         body = np.zeros((self.gh, self.gw), bool)
         part = np.zeros((self.gh, self.gw), bool)
         openings, bars = [], []
-        for box, mask, kind, edges in items:
+        for box, mask, kind, edges, pad in items:
             if kind == "show":
                 openings.append(box)
                 continue
@@ -1637,11 +1692,20 @@ class MosaicGrid:
             zx1, zy1, zx2, zy2 = box[0] // b, box[1] // b, -(-box[2] // b), -(-box[3] // b)
             if zx2 <= zx1 or zy2 <= zy1:
                 continue
+            gw_, gh_ = zx2 - zx1, zy2 - zy1
             if mask is not None:
-                m = cv2.resize(mask, (zx2 - zx1, zy2 - zy1), interpolation=cv2.INTER_AREA) > 0.02
+                if gw_ > mask.shape[1] or gh_ > mask.shape[0]:
+                    # Small blocks, coarse outline: smooth it instead of copying
+                    # its square steps
+                    m = cv2.resize(mask, (gw_, gh_), interpolation=cv2.INTER_LINEAR) > 0.4
+                else:
+                    m = cv2.resize((mask > 0.5).astype(np.float32), (gw_, gh_),
+                                   interpolation=cv2.INTER_AREA) > 0.02
                 target = body
             else:
-                m = np.ones((zy2 - zy1, zx2 - zx1), bool)
+                # Cut off by a screen edge: keep it square, it goes on past the edge
+                m = (np.ones((gh_, gw_), bool) if edges
+                     else self.rounded(box, gw_, gh_, zx1, zy1, pad))
                 target = part
             gx1, gy1, gx2, gy2 = max(0, zx1), max(0, zy1), min(self.gw, zx2), min(self.gh, zy2)
             if gx2 > gx1 and gy2 > gy1:
@@ -2072,7 +2136,7 @@ class TrayIcon:
         wc.hInstance = hinst
         wc.lpszClassName = "ScreenPixelatorTray"
         user32.RegisterClassExW(ctypes.byref(wc))
-        self.hwnd = u.CreateWindowExW(0x80, "ScreenPixelatorTray", APP_NAME, 0x80000000,
+        self.hwnd = u.CreateWindowExW(0x80, "ScreenPixelatorTray", "ScreenPixelator tray", 0x80000000,
                                       0, 0, 0, 0, None, None, hinst, None)
         self.icon = None
         if os.path.exists(ICON_FILE):
@@ -2222,7 +2286,17 @@ class TkOverlay:
 def overlay_hidden_from_capture(overlay, source: FrameSource) -> bool:
     """Flash a test pattern in the overlay and check the captured pictures
     don't contain it (otherwise the mosaic would follow itself)."""
-    x1, y1, x2, y2 = 36, 36, 108, 108
+    # Checked once per Windows version: the test patch would otherwise flash
+    # at every start
+    build = sys.getwindowsversion().build if hasattr(sys, "getwindowsversion") else 0
+    try:
+        with open(CHECK_FILE) as f:
+            known = json.load(f)
+        if known.get("build") == build and "hidden" in known:
+            return bool(known["hidden"])
+    except Exception:
+        pass
+    x1, y1, x2, y2 = 4, 4, 20, 20     # small, in the corner
     pattern = np.zeros((y2 - y1, x2 - x1, 4), np.uint8)
     pattern[:, :, 3] = 255
     pattern[::2, :, 2] = 255     # red / blue stripes, unlike anything on screen
@@ -2238,8 +2312,14 @@ def overlay_hidden_from_capture(overlay, source: FrameSource) -> bool:
     overlay.buf[y1:y2, x1:x2] = 0
     overlay._push((x1, y1, x2, y2))
     if seen is None:
-        return True              # no picture yet: nothing seen
-    return np.abs(seen - pattern[:, :, :3].astype(int)).mean() > 40
+        return True              # no picture yet: nothing seen, check again next time
+    hidden = bool(np.abs(seen - pattern[:, :, :3].astype(int)).mean() > 40)
+    try:
+        with open(CHECK_FILE, "w") as f:
+            json.dump({"build": build, "hidden": hidden}, f)
+    except Exception:
+        pass
+    return hidden
 
 
 def other_copy_running() -> bool:
@@ -2442,9 +2522,9 @@ def run() -> None:
             # No new picture for a while means the screen stands still.
             gap = now - t_frame
             ahead = gap + PREDICT_SECONDS if gap < STILL_AFTER else 0.0
-            items = [(tracker.draw_box(z, ahead), z.mask, z.kind, z.edges) for z in tracker.zones]
+            items = [(tracker.draw_box(z, ahead), z.mask, z.kind, z.edges, z.pad) for z in tracker.zones]
             if testing:
-                items.append((test_box, None, "part", ""))
+                items.append((test_box, None, "part", "", 0.0))
         if program_filter and now >= stats["filter_next"]:
             stats["filter_next"] = now + 0.25
             try:
@@ -2455,7 +2535,7 @@ def run() -> None:
                 pause.clear()
             else:
                 pause.set()   # none of the programs on screen: the scanners rest
-        key = [(b, id(m), k, e) for b, m, k, e in items]
+        key = [(b, id(m), k, e) for b, m, k, e, _ in items]
         if program_filter:
             key.append(program_filter.version)
         if new_picture or key != stats["key"]:  # otherwise the window already shows this

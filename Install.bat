@@ -1,5 +1,5 @@
 @echo off
-title ScreenPixelator 1.0 installer
+title ScreenPixelator 1.1 installer
 set "PS1=%~dp0files\install.ps1"
 if not exist "%PS1%" set "PS1=%~dp0install.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"

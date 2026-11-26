@@ -1,4 +1,4 @@
-# ScreenPixelator 1.0 installer
+# ScreenPixelator 1.1 installer
 # Installs Python 3.13 (if needed) and the packages, copies the program to
 # %LOCALAPPDATA%\ScreenPixelator, makes shortcuts and starts it.
 
@@ -33,7 +33,7 @@ function New-Shortcut($Path, $Target, $Arguments) {
     $s.Save()
 }
 
-Write-Host "ScreenPixelator 1.0 installer" -ForegroundColor Green
+Write-Host "ScreenPixelator 1.1 installer" -ForegroundColor Green
 
 # --- Python ---
 Step "Python 3.13"
@@ -124,7 +124,7 @@ if ($runAtStartup) { Write-Host "Starts automatically when Windows starts." }
 $key = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ScreenPixelator"
 New-Item -Path $key -Force | Out-Null
 $values = @{
-    DisplayName = "ScreenPixelator 1.0"; DisplayVersion = "1.0"; Publisher = "ScreenPixelator"
+    DisplayName = "ScreenPixelator"; DisplayVersion = "1.1"; Publisher = "ScreenPixelator"
     DisplayIcon = (Join-Path $App "pixelator.ico"); InstallLocation = $App
     UninstallString = '"' + $pyw + '" "' + (Join-Path $App "pixelator_settings.pyw") + '" --uninstall'
 }

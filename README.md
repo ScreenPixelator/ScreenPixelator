@@ -1,4 +1,4 @@
-# ScreenPixelator 1.0
+# ScreenPixelator
 
 ScreenPixelator puts a mosaic over nudity on your Windows screen, live, in any program you choose: browsers, video players, photo viewers, chat apps. It runs quietly in the background, follows moving video and scrolling pages, and leaves the rest of your screen alone.
 
@@ -6,7 +6,7 @@ Everything happens on your own computer. No screen images, settings or statistic
 
 ![A painting with the body covered by ScreenPixelator and the face visible](images/goya-example.png)
 
-*Francisco Goya, La maja desnuda (c. 1797–1800), Museo del Prado. Public domain, via Wikimedia Commons. Covered by ScreenPixelator with "Hide women (faces visible)".*
+*Francisco Goya, La maja desnuda (c. 1797–1800), Museo del Prado. Public domain, via Wikimedia Commons. Covered by ScreenPixelator with "Women covered, men visible".*
 
 ![The ScreenPixelator settings window](images/settings-window.jpg)
 
@@ -14,9 +14,10 @@ Everything happens on your own computer. No screen images, settings or statistic
 
 ## What it can do
 
+- **Quick choices** for the most common wishes: *Hide nudity only* (the default), *Women covered, men visible*, *Men covered, women visible*, *Everyone covered*, *Women fully covered (eyes only)* and *Anonymous (eyes hidden)*. Choosing one applies it at once; everything can still be set one by one.
 - **Cover nudity live** on the screen: women's breasts and genitals (optionally also when covered by clothing), men's genitals and buttocks, each switchable.
 - **Cover whole bodies**: whole women, whole men, or people whose gender is unclear and who are partly naked. Faces can stay visible.
-- **Faces**, separately for women and men: show, hide, show only the eyes, or hide only the eyes.
+- **Faces**, separately for women and men: show, hide, show only the eyes, or hide only the eyes (a wide band over the eyes, like an anonymous photo). Note: like all mosaic, the eye band is only on your own screen, never in screenshots, recordings or screen sharing, so it cannot anonymise people in a video you share.
 - **Follow movement**: the mosaic moves with video, scrolling and dragged windows, and predicts the movement a little ahead.
 - **Only where you want it**: by default only inside browsers, video players, photo viewers and chat apps, never in Word, Excel, File Explorer or on the desktop. The list of programs can be edited.
 - **Look**: block size, and block colour from mosaic (the colours of the picture) to black.
@@ -53,14 +54,14 @@ Everything happens on your own computer. No screen images, settings or statistic
 
 **Updating:** when a new version is out, the settings window shows a *New version* button that opens its download page. Run the installer of the new version; your settings are kept.
 
-**Uninstalling:** Windows Settings → Apps → Installed apps → ScreenPixelator 1.0 → Uninstall (works without the password), or the *Uninstall* button in the settings window. Python and its packages stay installed.
+**Uninstalling:** Windows Settings → Apps → Installed apps → ScreenPixelator → Uninstall (works without the password), or the *Uninstall* button in the settings window. Python and its packages stay installed.
 
 **Forgot the password?** Delete `settings.json` in `%LOCALAPPDATA%\ScreenPixelator`. All settings go back to the defaults.
 
 ## Using it
 
 - Open **Screen Pixelator Settings** from the Start menu, the desktop or the tray icon.
-- Change what you like and click **Save and apply**. The pixelator restarts with the new settings in a few seconds.
+- Change what you like: changes take effect by themselves, 2 seconds after your last change (the pixelator restarts in a few seconds; during that short moment nothing is covered).
 - **CTRL + ALT + Q** stops the pixelator (switched off while a password is set).
 - **CTRL + ALT + P** (or *Save picture with mosaic* in the tray icon's menu) saves a picture of the screen with the mosaic in `Pictures\ScreenPixelator` (normal screenshot tools can't see the mosaic, see below).
 
@@ -108,4 +109,6 @@ The software is provided "as is", without any warranty. Use it at your own discr
 
 ## Version history
 
+- **1.1**: quick choices (presets) that also set faces, darkness and strength; *Hide nudity only* is the new default; *Anonymous (eyes hidden)* with a wider eye band; milder default strength; block size per quick choice; smoother outlines with small blocks.
+- **1.0.1**: fix: the settings window could hang or show up empty; Start, Stop and Save and apply now work in the background; errors of the settings window are logged in settings.log.
 - **1.0**: first public version.
